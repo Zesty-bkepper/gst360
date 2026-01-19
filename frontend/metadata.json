@@ -1,0 +1,8 @@
+{
+  "name": "GST360",
+  "description": "Premium 360-degree GST filing and tax compliance platform for Indian businesses. Built with precision and intentionality.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

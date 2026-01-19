@@ -1,0 +1,22 @@
+[project]
+name = "gst-auto"
+version = "0.1.0"
+description = "GST360 - Business GST Compliance Platform"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "pydantic[email]>=2.0.0",
+    "python-multipart>=0.0.6",
+    "python-dotenv>=1.0.0",
+    "langgraph>=0.2.0",
+    "anthropic>=0.40.0",
+    "pillow>=10.0.0",
+    "boto3>=1.34.0",  # AWS S3
+]
+
+[project.scripts]
+gst-api = "backend.main:app"
