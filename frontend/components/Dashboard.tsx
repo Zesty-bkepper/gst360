@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Button from './Button';
 import { ICONS } from '../constants';
+import { API_BASE } from '../config';
 
 interface UploadedFile {
   id: number;
@@ -28,8 +29,6 @@ interface DashboardStats {
   pending_documents: number;
   total_gst: string;
 }
-
-const API_BASE = 'http://localhost:8000';
 
 const Dashboard: React.FC = () => {
   const [searchParams] = useSearchParams();

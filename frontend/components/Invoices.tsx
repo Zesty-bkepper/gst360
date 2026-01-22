@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Button from './Button';
 import { ICONS } from '../constants';
+import { API_BASE } from '../config';
 
 interface ExtractedData {
   invoice_id: string | null;
@@ -39,8 +40,6 @@ interface VerificationState {
   dateConfirmed: boolean;
   isEditing: boolean;
 }
-
-const API_BASE = 'http://localhost:8000';
 
 const Invoices: React.FC = () => {
   const [searchParams] = useSearchParams();

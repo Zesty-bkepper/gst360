@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Button from './Button';
 import { ICONS } from '../constants';
+import { API_BASE } from '../config';
 
 // Indian States and Union Territories
 const INDIAN_STATES = [
@@ -78,7 +79,7 @@ const SignUp: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/businesses', {
+      const response = await fetch(`${API_BASE}/api/businesses`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

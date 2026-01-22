@@ -29,9 +29,16 @@ app = FastAPI(
 )
 
 # CORS middleware for frontend
+# In production, replace * with your actual domain
+import os
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+# Allow all origins in production behind ALB (ALB handles security)
+if os.getenv("ALLOW_ALL_ORIGINS", "false").lower() == "true":
+    CORS_ORIGINS = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

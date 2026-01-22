@@ -1,15 +1,23 @@
 """
 Database configuration and models for GST360 Business Management
 """
+import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, JSON, Enum as SQLEnum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import enum
 
-DATABASE_URL = "sqlite:///./gst360.db"
+# Support both SQLite (dev) and PostgreSQL (production)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./gst360.db")
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Configure engine based on database type
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    # PostgreSQL or other databases
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=20)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

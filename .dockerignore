@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.venv
+venv
+env
+.env.local
+
+# Node
+node_modules
+npm-debug.log
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build artifacts
+dist
+build
+*.egg-info
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+
+# Documentation
+*.md
+!README.md
+
+# AWS/Deployment
+aws/
+scripts/
+
+# Database
+*.db
+*.sqlite
+
+# Uploads (handled by volume/S3)
+uploads/
