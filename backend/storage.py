@@ -101,11 +101,10 @@ class S3Storage(StorageBackend):
     def client(self):
         if self._client is None:
             import boto3
+            # Use default credential chain (works with IAM roles in ECS/Lambda)
             self._client = boto3.client(
                 "s3",
                 region_name=self.region,
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
             )
         return self._client
 

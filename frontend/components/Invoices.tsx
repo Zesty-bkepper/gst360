@@ -21,7 +21,42 @@ interface Invoice {
   invoice_number?: string;
   gst_amount?: string;
   invoice_date?: string;
-  extracted_data?: { verified?: boolean; [key: string]: any };
+  // GST Compliance Fields (may be at top level or in extracted_data)
+  place_of_supply?: string;
+  customer_gstin?: string;
+  party_name?: string;
+  taxable_value?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  state_code?: string;
+  gst_rate?: number;
+  gst_cess?: number;
+  total_invoice_value?: number;
+  type_of_supply?: 'B2B' | 'B2C_SMALL' | 'B2C_LARGE';
+  extracted_data?: {
+    verified?: boolean;
+    place_of_supply?: string;
+    customer_gstin?: string;
+    party_name?: string;
+    taxable_value?: number;
+    cgst?: number;
+    sgst?: number;
+    igst?: number;
+    state_code?: string;
+    gst_rate?: number;
+    gst_cess?: number;
+    total_invoice_value?: number;
+    type_of_supply?: string;
+    [key: string]: any;
+  };
+}
+
+// Helper to get GST field from invoice (checks both top-level and extracted_data)
+function getGstField<T>(invoice: Invoice, field: keyof Invoice): T | undefined {
+  const topLevel = invoice[field] as T | undefined;
+  if (topLevel !== undefined && topLevel !== null) return topLevel;
+  return invoice.extracted_data?.[field as string] as T | undefined;
 }
 
 interface Business {
@@ -39,6 +74,18 @@ interface VerificationState {
   amountConfirmed: boolean;
   dateConfirmed: boolean;
   isEditing: boolean;
+  // GST Compliance Fields
+  placeOfSupply: string;
+  customerGstin: string;
+  partyName: string;
+  taxableValue: string;
+  cgst: string;
+  sgst: string;
+  igst: string;
+  stateCode: string;
+  gstRate: string;
+  gstCess: string;
+  typeOfSupply: string;
 }
 
 const Invoices: React.FC = () => {
@@ -71,14 +118,40 @@ const Invoices: React.FC = () => {
           const states = new Map<number, VerificationState>();
           docs.forEach((doc: Invoice) => {
             if (doc.status === 'completed' && !doc.extracted_data?.verified) {
+              // Get GST fields from either top-level or extracted_data
+              const placeOfSupply = getGstField<string>(doc, 'place_of_supply') || '';
+              const customerGstin = getGstField<string>(doc, 'customer_gstin') || '';
+              const partyName = getGstField<string>(doc, 'party_name') || '';
+              const taxableValue = getGstField<number>(doc, 'taxable_value');
+              const cgst = getGstField<number>(doc, 'cgst');
+              const sgst = getGstField<number>(doc, 'sgst');
+              const igst = getGstField<number>(doc, 'igst');
+              const stateCode = getGstField<string>(doc, 'state_code') || '';
+              const gstRate = getGstField<number>(doc, 'gst_rate');
+              const gstCess = getGstField<number>(doc, 'gst_cess');
+              const totalValue = getGstField<number>(doc, 'total_invoice_value');
+              const typeOfSupply = getGstField<string>(doc, 'type_of_supply') || '';
+
               states.set(doc.id, {
                 documentId: doc.id,
                 invoiceId: doc.invoice_number || '',
-                amount: doc.gst_amount || '',
+                amount: totalValue?.toString() || doc.gst_amount || '',
                 date: doc.invoice_date ? doc.invoice_date.split('T')[0] : '',
                 amountConfirmed: false,
                 dateConfirmed: false,
                 isEditing: false,
+                // GST fields
+                placeOfSupply,
+                customerGstin,
+                partyName,
+                taxableValue: taxableValue?.toString() || '',
+                cgst: cgst?.toString() || '',
+                sgst: sgst?.toString() || '',
+                igst: igst?.toString() || '',
+                stateCode,
+                gstRate: gstRate?.toString() || '',
+                gstCess: gstCess?.toString() || '',
+                typeOfSupply,
               });
             }
           });
@@ -141,14 +214,40 @@ const Invoices: React.FC = () => {
                   if (updatedDoc.status === 'completed') {
                     setVerificationStates(prev => {
                       const newStates = new Map(prev);
+                      // Get GST fields from either top-level or extracted_data
+                      const placeOfSupply = getGstField<string>(updatedDoc, 'place_of_supply') || '';
+                      const customerGstin = getGstField<string>(updatedDoc, 'customer_gstin') || '';
+                      const partyName = getGstField<string>(updatedDoc, 'party_name') || '';
+                      const taxableValue = getGstField<number>(updatedDoc, 'taxable_value');
+                      const cgst = getGstField<number>(updatedDoc, 'cgst');
+                      const sgst = getGstField<number>(updatedDoc, 'sgst');
+                      const igst = getGstField<number>(updatedDoc, 'igst');
+                      const stateCode = getGstField<string>(updatedDoc, 'state_code') || '';
+                      const gstRate = getGstField<number>(updatedDoc, 'gst_rate');
+                      const gstCess = getGstField<number>(updatedDoc, 'gst_cess');
+                      const totalValue = getGstField<number>(updatedDoc, 'total_invoice_value');
+                      const typeOfSupply = getGstField<string>(updatedDoc, 'type_of_supply') || '';
+
                       newStates.set(updatedDoc.id, {
                         documentId: updatedDoc.id,
                         invoiceId: updatedDoc.invoice_number || '',
-                        amount: updatedDoc.gst_amount || '',
+                        amount: totalValue?.toString() || updatedDoc.gst_amount || '',
                         date: updatedDoc.invoice_date ? updatedDoc.invoice_date.split('T')[0] : '',
                         amountConfirmed: false,
                         dateConfirmed: false,
                         isEditing: false,
+                        // GST fields
+                        placeOfSupply,
+                        customerGstin,
+                        partyName,
+                        taxableValue: taxableValue?.toString() || '',
+                        cgst: cgst?.toString() || '',
+                        sgst: sgst?.toString() || '',
+                        igst: igst?.toString() || '',
+                        stateCode,
+                        gstRate: gstRate?.toString() || '',
+                        gstCess: gstCess?.toString() || '',
+                        typeOfSupply,
                       });
                       return newStates;
                     });
@@ -411,86 +510,276 @@ const Invoices: React.FC = () => {
                         </div>
 
                         {/* Extracted Data */}
-                        <div>
-                          <p className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-4">Extracted Data - Please Verify</p>
+                        <div className="overflow-y-auto max-h-[500px]">
+                          <div className="flex items-center justify-between mb-4">
+                            <p className="text-sm font-medium text-slate-500 uppercase tracking-wider">Extracted GST Data</p>
+                            {state.typeOfSupply && (
+                              <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                state.typeOfSupply === 'B2B'
+                                  ? 'bg-purple-100 text-purple-700'
+                                  : state.typeOfSupply === 'B2C_LARGE'
+                                  ? 'bg-orange-100 text-orange-700'
+                                  : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {state.typeOfSupply}
+                              </span>
+                            )}
+                          </div>
 
-                          <div className="space-y-4">
-                            {/* Invoice ID */}
-                            <div className="space-y-2">
-                              <label className="text-sm font-semibold text-slate-700">Invoice ID</label>
-                              {state.isEditing ? (
-                                <input
-                                  type="text"
-                                  value={state.invoiceId}
-                                  onChange={(e) => updateVerificationState(inv.id, { invoiceId: e.target.value })}
-                                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all"
-                                />
-                              ) : (
-                                <p className="px-4 py-3 bg-slate-50 rounded-xl font-medium text-slate-900">
-                                  {state.invoiceId || 'Not detected'}
-                                </p>
-                              )}
+                          <div className="space-y-3">
+                            {/* Invoice Number & Date Row */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500">Invoice No.</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={state.invoiceId}
+                                    onChange={(e) => updateVerificationState(inv.id, { invoiceId: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                  />
+                                ) : (
+                                  <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900">
+                                    {state.invoiceId || '-'}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500">Date</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="date"
+                                    value={state.date}
+                                    onChange={(e) => updateVerificationState(inv.id, { date: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                  />
+                                ) : (
+                                  <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900">
+                                    {state.date || '-'}
+                                  </p>
+                                )}
+                              </div>
                             </div>
 
-                            {/* Amount */}
-                            <div className="space-y-2">
-                              <label className="text-sm font-semibold text-slate-700">Amount</label>
-                              {state.isEditing ? (
-                                <input
-                                  type="text"
-                                  value={state.amount}
-                                  onChange={(e) => updateVerificationState(inv.id, { amount: e.target.value })}
-                                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all"
-                                />
-                              ) : (
-                                <div className="flex items-center gap-3">
-                                  <p className={`flex-grow px-4 py-3 rounded-xl font-medium ${
-                                    state.amountConfirmed ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-50 text-slate-900'
-                                  }`}>
-                                    {state.amount || 'Not detected'}
+                            {/* Party Name & GSTIN Row */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500">Party Name</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={state.partyName}
+                                    onChange={(e) => updateVerificationState(inv.id, { partyName: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                  />
+                                ) : (
+                                  <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900 truncate">
+                                    {state.partyName || '-'}
                                   </p>
-                                  <label className="flex items-center gap-2 cursor-pointer">
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500">Customer GSTIN</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={state.customerGstin}
+                                    onChange={(e) => updateVerificationState(inv.id, { customerGstin: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none font-mono"
+                                  />
+                                ) : (
+                                  <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-mono text-slate-900">
+                                    {state.customerGstin || <span className="text-slate-400 font-sans">B2C (No GSTIN)</span>}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Place of Supply & State Code */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500">Place of Supply</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={state.placeOfSupply}
+                                    onChange={(e) => updateVerificationState(inv.id, { placeOfSupply: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                  />
+                                ) : (
+                                  <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900">
+                                    {state.placeOfSupply || '-'}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500">State Code</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={state.stateCode}
+                                    onChange={(e) => updateVerificationState(inv.id, { stateCode: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                  />
+                                ) : (
+                                  <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900">
+                                    {state.stateCode || '-'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Tax Breakdown Section */}
+                            <div className="mt-4 pt-3 border-t border-slate-100">
+                              <p className="text-xs font-semibold text-slate-500 mb-2">TAX BREAKDOWN</p>
+
+                              {/* Taxable Value & GST Rate */}
+                              <div className="grid grid-cols-2 gap-3 mb-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-500">Taxable Value</label>
+                                  {state.isEditing ? (
                                     <input
-                                      type="checkbox"
-                                      checked={state.amountConfirmed}
-                                      onChange={(e) => updateVerificationState(inv.id, { amountConfirmed: e.target.checked })}
-                                      className="w-5 h-5 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                                      type="text"
+                                      value={state.taxableValue}
+                                      onChange={(e) => updateVerificationState(inv.id, { taxableValue: e.target.value })}
+                                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
                                     />
-                                    <span className="text-sm text-slate-600">Correct</span>
-                                  </label>
+                                  ) : (
+                                    <p className="px-3 py-2 bg-blue-50 rounded-lg text-sm font-semibold text-blue-900">
+                                      {state.taxableValue ? `₹${parseFloat(state.taxableValue).toLocaleString('en-IN')}` : '-'}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-500">GST Rate</label>
+                                  {state.isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={state.gstRate}
+                                      onChange={(e) => updateVerificationState(inv.id, { gstRate: e.target.value })}
+                                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                    />
+                                  ) : (
+                                    <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900">
+                                      {state.gstRate ? `${state.gstRate}%` : '-'}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* CGST, SGST, IGST */}
+                              <div className="grid grid-cols-3 gap-2 mb-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-500">CGST</label>
+                                  {state.isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={state.cgst}
+                                      onChange={(e) => updateVerificationState(inv.id, { cgst: e.target.value })}
+                                      className="w-full px-2 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                    />
+                                  ) : (
+                                    <p className="px-2 py-2 bg-green-50 rounded-lg text-sm font-medium text-green-800 text-center">
+                                      {state.cgst ? `₹${parseFloat(state.cgst).toLocaleString('en-IN')}` : '-'}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-500">SGST</label>
+                                  {state.isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={state.sgst}
+                                      onChange={(e) => updateVerificationState(inv.id, { sgst: e.target.value })}
+                                      className="w-full px-2 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                    />
+                                  ) : (
+                                    <p className="px-2 py-2 bg-green-50 rounded-lg text-sm font-medium text-green-800 text-center">
+                                      {state.sgst ? `₹${parseFloat(state.sgst).toLocaleString('en-IN')}` : '-'}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-500">IGST</label>
+                                  {state.isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={state.igst}
+                                      onChange={(e) => updateVerificationState(inv.id, { igst: e.target.value })}
+                                      className="w-full px-2 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                    />
+                                  ) : (
+                                    <p className="px-2 py-2 bg-amber-50 rounded-lg text-sm font-medium text-amber-800 text-center">
+                                      {state.igst ? `₹${parseFloat(state.igst).toLocaleString('en-IN')}` : '-'}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* GST Cess */}
+                              {(state.gstCess || state.isEditing) && (
+                                <div className="space-y-1 mb-2">
+                                  <label className="text-xs font-semibold text-slate-500">GST Cess</label>
+                                  {state.isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={state.gstCess}
+                                      onChange={(e) => updateVerificationState(inv.id, { gstCess: e.target.value })}
+                                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                    />
+                                  ) : (
+                                    <p className="px-3 py-2 bg-slate-50 rounded-lg text-sm font-medium text-slate-900">
+                                      {state.gstCess ? `₹${parseFloat(state.gstCess).toLocaleString('en-IN')}` : '-'}
+                                    </p>
+                                  )}
                                 </div>
                               )}
+
+                              {/* Total Invoice Value */}
+                              <div className="space-y-1 mt-3 pt-2 border-t border-slate-200">
+                                <label className="text-xs font-semibold text-slate-500">TOTAL INVOICE VALUE</label>
+                                {state.isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={state.amount}
+                                    onChange={(e) => updateVerificationState(inv.id, { amount: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:border-blue-400 outline-none"
+                                  />
+                                ) : (
+                                  <div className="flex items-center gap-3">
+                                    <p className={`flex-grow px-3 py-2 rounded-lg text-lg font-bold ${
+                                      state.amountConfirmed ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-slate-100 text-slate-900'
+                                    }`}>
+                                      {state.amount ? `₹${parseFloat(state.amount).toLocaleString('en-IN')}` : '-'}
+                                    </p>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={state.amountConfirmed}
+                                        onChange={(e) => updateVerificationState(inv.id, { amountConfirmed: e.target.checked })}
+                                        className="w-5 h-5 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                                      />
+                                      <span className="text-xs text-slate-600">OK</span>
+                                    </label>
+                                  </div>
+                                )}
+                              </div>
                             </div>
 
-                            {/* Date */}
-                            <div className="space-y-2">
-                              <label className="text-sm font-semibold text-slate-700">Date</label>
-                              {state.isEditing ? (
-                                <input
-                                  type="date"
-                                  value={state.date}
-                                  onChange={(e) => updateVerificationState(inv.id, { date: e.target.value })}
-                                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all"
-                                />
-                              ) : (
-                                <div className="flex items-center gap-3">
-                                  <p className={`flex-grow px-4 py-3 rounded-xl font-medium ${
-                                    state.dateConfirmed ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-50 text-slate-900'
-                                  }`}>
-                                    {state.date || 'Not detected'}
-                                  </p>
-                                  <label className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                      type="checkbox"
-                                      checked={state.dateConfirmed}
-                                      onChange={(e) => updateVerificationState(inv.id, { dateConfirmed: e.target.checked })}
-                                      className="w-5 h-5 rounded border-slate-300 text-green-600 focus:ring-green-500"
-                                    />
-                                    <span className="text-sm text-slate-600">Correct</span>
-                                  </label>
-                                </div>
-                              )}
-                            </div>
+                            {/* Date Confirmation (not in edit mode) */}
+                            {!state.isEditing && (
+                              <div className="flex items-center justify-end gap-2 mt-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={state.dateConfirmed}
+                                    onChange={(e) => updateVerificationState(inv.id, { dateConfirmed: e.target.checked })}
+                                    className="w-5 h-5 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                                  />
+                                  <span className="text-xs text-slate-600">Date is correct</span>
+                                </label>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -546,61 +835,111 @@ const Invoices: React.FC = () => {
               <p className="text-sm text-slate-500">Upload and verify invoices to see them here</p>
             </div>
           ) : (
-            <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden">
-              <table className="w-full">
+            <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden overflow-x-auto">
+              <table className="w-full min-w-[1000px]">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Invoice</th>
-                    <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Invoice ID</th>
-                    <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Amount</th>
-                    <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Date</th>
-                    <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
-                    <th className="text-right px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Actions</th>
+                    <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Invoice</th>
+                    <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Type</th>
+                    <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Party / GSTIN</th>
+                    <th className="text-right px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Taxable</th>
+                    <th className="text-right px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">CGST</th>
+                    <th className="text-right px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">SGST</th>
+                    <th className="text-right px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">IGST</th>
+                    <th className="text-right px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Total</th>
+                    <th className="text-center px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {verified.map(inv => (
+                  {verified.map(inv => {
+                    // Get GST fields from either top-level or extracted_data
+                    const typeOfSupply = getGstField<string>(inv, 'type_of_supply');
+                    const partyName = getGstField<string>(inv, 'party_name');
+                    const customerGstin = getGstField<string>(inv, 'customer_gstin');
+                    const taxableValue = getGstField<number>(inv, 'taxable_value');
+                    const cgst = getGstField<number>(inv, 'cgst');
+                    const sgst = getGstField<number>(inv, 'sgst');
+                    const igst = getGstField<number>(inv, 'igst');
+                    const totalInvoiceValue = getGstField<number>(inv, 'total_invoice_value');
+
+                    return (
                     <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center">
-                            <ICONS.FileText className="w-5 h-5 text-green-600" />
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-green-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <ICONS.FileText className="w-4 h-4 text-green-600" />
                           </div>
-                          <div>
-                            <p className="font-medium text-slate-900 truncate max-w-[200px]">{inv.filename}</p>
-                            <p className="text-xs text-slate-500">{formatFileSize(inv.file_size)}</p>
+                          <div className="min-w-0">
+                            <p className="font-medium text-slate-900 text-sm truncate max-w-[120px]" title={inv.filename}>
+                              {inv.invoice_number || inv.filename}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {inv.invoice_date ? new Date(inv.invoice_date).toLocaleDateString('en-IN') : '-'}
+                            </p>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <span className="font-mono text-sm text-slate-700">{inv.invoice_number || '-'}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="font-semibold text-slate-900">{inv.gst_amount || '-'}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-slate-700">
-                          {inv.invoice_date ? new Date(inv.invoice_date).toLocaleDateString() : '-'}
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex px-2 py-1 rounded-md text-xs font-bold ${
+                          typeOfSupply === 'B2B'
+                            ? 'bg-purple-100 text-purple-700'
+                            : typeOfSupply === 'B2C_LARGE'
+                            ? 'bg-orange-100 text-orange-700'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {typeOfSupply || '-'}
                         </span>
                       </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-semibold">
-                          <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-                          Verified
+                      <td className="px-4 py-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-900 truncate max-w-[150px]" title={partyName || ''}>
+                            {partyName || '-'}
+                          </p>
+                          {customerGstin ? (
+                            <p className="text-xs font-mono text-slate-500">{customerGstin}</p>
+                          ) : (
+                            <p className="text-xs text-slate-400">No GSTIN</p>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm font-medium text-slate-900">
+                          {taxableValue ? `₹${taxableValue.toLocaleString('en-IN')}` : '-'}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm text-green-700">
+                          {cgst ? `₹${cgst.toLocaleString('en-IN')}` : '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm text-green-700">
+                          {sgst ? `₹${sgst.toLocaleString('en-IN')}` : '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm text-amber-700">
+                          {igst ? `₹${igst.toLocaleString('en-IN')}` : '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm font-bold text-slate-900">
+                          {totalInvoiceValue ? `₹${totalInvoiceValue.toLocaleString('en-IN')}` : (inv.gst_amount || '-')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
                         <button
                           onClick={() => deleteInvoice(inv.id)}
-                          className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                         >
-                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                           </svg>
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

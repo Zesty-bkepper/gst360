@@ -320,7 +320,7 @@ def get_document_file(document_id: int, db: Session = Depends(get_db)):
 def process_document_endpoint(document_id: int, db: Session = Depends(get_db)):
     """
     Process document using LangGraph + Anthropic Vision
-    Extracts invoice_id, amount, and date from the document
+    Extracts GST-compliant invoice data and classifies supply type (B2B/B2C)
     """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
@@ -340,11 +340,27 @@ def process_document_endpoint(document_id: int, db: Session = Depends(get_db)):
             db.commit()
             return {"message": f"Processing failed: {result['error']}", "document_id": document_id}
 
-        # Update document with extracted data
+        # Update document with extracted GST compliance data
         document.status = "completed"
         document.processed_at = datetime.utcnow()
-        document.invoice_number = result.get("invoice_id")
-        document.gst_amount = result.get("amount")
+
+        # GST Compliance Fields
+        document.invoice_number = result.get("invoice_number") or result.get("invoice_id")
+        document.place_of_supply = result.get("place_of_supply")
+        document.customer_gstin = result.get("customer_gstin")
+        document.party_name = result.get("party_name")
+        document.taxable_value = result.get("taxable_value")
+        document.cgst = result.get("cgst")
+        document.sgst = result.get("sgst")
+        document.igst = result.get("igst")
+        document.state_code = result.get("state_code")
+        document.gst_rate = result.get("gst_rate")
+        document.gst_cess = result.get("gst_cess")
+        document.total_invoice_value = result.get("total_invoice_value")
+        document.type_of_supply = result.get("type_of_supply")
+
+        # Legacy fields (backward compatibility)
+        document.gst_amount = result.get("amount") or str(result.get("total_invoice_value", ""))
         document.extracted_data = result.get("raw_response")
 
         # Parse and set invoice date
@@ -356,13 +372,36 @@ def process_document_endpoint(document_id: int, db: Session = Depends(get_db)):
 
         db.commit()
 
-        # Also save to extracted_invoices table
+        # Also save to extracted_invoices table with full GST data
+        invoice_date = None
+        if result.get("date"):
+            try:
+                invoice_date = datetime.strptime(result["date"], "%Y-%m-%d")
+            except:
+                pass
+
         extracted = ExtractedInvoice(
             document_id=document_id,
             business_id=document.business_id,
-            invoice_id=result.get("invoice_id"),
+            # GST Compliance Fields
+            date=invoice_date,
+            invoice_number=result.get("invoice_number") or result.get("invoice_id"),
+            place_of_supply=result.get("place_of_supply"),
+            customer_gstin=result.get("customer_gstin"),
+            party_name=result.get("party_name"),
+            taxable_value=result.get("taxable_value"),
+            cgst=result.get("cgst"),
+            sgst=result.get("sgst"),
+            igst=result.get("igst"),
+            state_code=result.get("state_code"),
+            gst_rate=result.get("gst_rate"),
+            gst_cess=result.get("gst_cess"),
+            total_invoice_value=result.get("total_invoice_value"),
+            type_of_supply=result.get("type_of_supply"),
+            # Legacy fields
+            invoice_id=result.get("invoice_number") or result.get("invoice_id"),
             amount=result.get("amount"),
-            date=document.invoice_date,
+            # Metadata
             confidence=result.get("confidence"),
             raw_response=result.get("raw_response"),
         )
@@ -372,10 +411,22 @@ def process_document_endpoint(document_id: int, db: Session = Depends(get_db)):
         return {
             "message": "Document processed successfully",
             "document_id": document_id,
+            "type_of_supply": result.get("type_of_supply"),
             "extracted": {
-                "invoice_id": result.get("invoice_id"),
-                "amount": result.get("amount"),
+                "invoice_number": result.get("invoice_number"),
                 "date": result.get("date"),
+                "place_of_supply": result.get("place_of_supply"),
+                "customer_gstin": result.get("customer_gstin"),
+                "party_name": result.get("party_name"),
+                "taxable_value": result.get("taxable_value"),
+                "cgst": result.get("cgst"),
+                "sgst": result.get("sgst"),
+                "igst": result.get("igst"),
+                "state_code": result.get("state_code"),
+                "gst_rate": result.get("gst_rate"),
+                "gst_cess": result.get("gst_cess"),
+                "total_invoice_value": result.get("total_invoice_value"),
+                "type_of_supply": result.get("type_of_supply"),
                 "confidence": result.get("confidence")
             }
         }

@@ -1,9 +1,10 @@
 """
 Database configuration and models for GST360 Business Management
+Supports GST compliance with B2B/B2C classification.
 """
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, JSON, Enum as SQLEnum
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, JSON, Enum as SQLEnum, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import enum
@@ -39,6 +40,13 @@ class TurnoverRange(str, enum.Enum):
     CR10_TO_50CR = "₹10 Crore - ₹50 Crore"
     CR50_TO_100CR = "₹50 Crore - ₹100 Crore"
     ABOVE_100CR = "Above ₹100 Crore"
+
+
+class SupplyType(str, enum.Enum):
+    """Type of supply classification for GST"""
+    B2B = "B2B"              # Business to Business (buyer has GSTIN)
+    B2C_SMALL = "B2C_SMALL"  # Business to Consumer, invoice < 20 lakhs
+    B2C_LARGE = "B2C_LARGE"  # Business to Consumer, invoice >= 20 lakhs
 
 
 class Business(Base):
@@ -89,6 +97,7 @@ class Business(Base):
 class Document(Base):
     """
     Documents uploaded by businesses (invoices, receipts, etc.)
+    Extended with GST compliance fields.
     """
     __tablename__ = "documents"
 
@@ -104,25 +113,41 @@ class Document(Base):
     # Processing Status
     status = Column(String(50), default="pending")  # pending, processing, completed, error
 
-    # Extracted Data (from OCR/AI processing)
-    extracted_data = Column(JSON, nullable=True)
-    gst_amount = Column(String(50), nullable=True)
-    invoice_number = Column(String(100), nullable=True)
+    # GST Compliance Fields (matching Excel structure)
+    invoice_number = Column(String(100), nullable=True, index=True)
     invoice_date = Column(DateTime, nullable=True)
+    place_of_supply = Column(String(100), nullable=True)
+    customer_gstin = Column(String(15), nullable=True, index=True)  # Buyer's GSTIN
+    party_name = Column(String(255), nullable=True)  # Buyer/Customer name
+    taxable_value = Column(Float, nullable=True)  # Amount before GST
+    cgst = Column(Float, nullable=True)  # Central GST
+    sgst = Column(Float, nullable=True)  # State GST
+    igst = Column(Float, nullable=True)  # Integrated GST
+    state_code = Column(String(2), nullable=True)  # State code (e.g., "27")
+    gst_rate = Column(Float, nullable=True)  # GST rate percentage
+    gst_cess = Column(Float, nullable=True)  # GST Cess
+    total_invoice_value = Column(Float, nullable=True)  # Total including GST
+    type_of_supply = Column(String(20), nullable=True)  # B2B, B2C_SMALL, B2C_LARGE
+
+    # Legacy fields (for backward compatibility)
+    gst_amount = Column(String(50), nullable=True)  # Formatted total amount
     vendor_name = Column(String(255), nullable=True)
+
+    # Extracted Data (full JSON from AI)
+    extracted_data = Column(JSON, nullable=True)
 
     # Metadata
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
-        return f"<Document(id={self.id}, filename='{self.filename}', status='{self.status}')>"
+        return f"<Document(id={self.id}, filename='{self.filename}', status='{self.status}', type='{self.type_of_supply}')>"
 
 
 class ExtractedInvoice(Base):
     """
     Extracted invoice data from vision model processing
-    Simple 3-column schema: invoice_id, amount, date
+    GST-compliant schema with B2B/B2C classification.
     """
     __tablename__ = "extracted_invoices"
 
@@ -130,23 +155,124 @@ class ExtractedInvoice(Base):
     document_id = Column(Integer, nullable=False, index=True)  # FK to documents table
     business_id = Column(Integer, nullable=False, index=True)
 
-    # Core extracted fields
-    invoice_id = Column(String(100), nullable=True, index=True)  # Invoice number from document
-    amount = Column(String(50), nullable=True)  # Total amount (stored as string to preserve formatting)
-    date = Column(DateTime, nullable=True)  # Invoice date
+    # GST Compliance Fields (matching Excel export structure)
+    date = Column(DateTime, nullable=True)
+    invoice_number = Column(String(100), nullable=True, index=True)
+    place_of_supply = Column(String(100), nullable=True)
+    customer_gstin = Column(String(15), nullable=True, index=True)  # Buyer's GSTIN
+    party_name = Column(String(255), nullable=True)  # Buyer/Customer name
+    taxable_value = Column(Float, nullable=True)
+    cgst = Column(Float, nullable=True)
+    sgst = Column(Float, nullable=True)
+    igst = Column(Float, nullable=True)
+    state_code = Column(String(2), nullable=True)
+    gst_rate = Column(Float, nullable=True)
+    gst_cess = Column(Float, nullable=True)
+    total_invoice_value = Column(Float, nullable=True)
+    type_of_supply = Column(String(20), nullable=True)  # B2B, B2C_SMALL, B2C_LARGE
 
-    # Additional metadata
-    confidence = Column(String(10), nullable=True)  # Extraction confidence score
-    raw_response = Column(JSON, nullable=True)  # Full LLM response for debugging
+    # Legacy fields (backward compatibility)
+    invoice_id = Column(String(100), nullable=True)
+    amount = Column(String(50), nullable=True)
+
+    # Metadata
+    confidence = Column(String(10), nullable=True)
+    raw_response = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
-        return f"<ExtractedInvoice(id={self.id}, invoice_id='{self.invoice_id}', amount='{self.amount}')>"
+        return f"<ExtractedInvoice(id={self.id}, invoice_number='{self.invoice_number}', type='{self.type_of_supply}')>"
+
+    def to_excel_row(self) -> dict:
+        """Convert to Excel export format"""
+        return {
+            "date": self.date.strftime("%d-%m-%Y") if self.date else None,
+            "invoice number": self.invoice_number,
+            "place of supply": self.place_of_supply,
+            "GSTnumber (of customer)": self.customer_gstin,
+            "party name": self.party_name,
+            "Taxable value": self.taxable_value,
+            "CGST": self.cgst,
+            "SGST": self.sgst,
+            "IGST": self.igst,
+            "state code": self.state_code,
+            "GST rate": self.gst_rate,
+            "GST cess": self.gst_cess,
+            "Type of supply": self.type_of_supply
+        }
 
 
 def init_db():
     """Initialize the database and create all tables"""
     Base.metadata.create_all(bind=engine)
+    # Run migrations for existing tables
+    run_migrations()
+
+
+def run_migrations():
+    """Run database migrations to add new columns to existing tables"""
+    from sqlalchemy import text
+
+    # Columns to add to documents table (if they don't exist)
+    documents_columns = [
+        ("place_of_supply", "VARCHAR(100)"),
+        ("customer_gstin", "VARCHAR(15)"),
+        ("party_name", "VARCHAR(255)"),
+        ("taxable_value", "FLOAT"),
+        ("cgst", "FLOAT"),
+        ("sgst", "FLOAT"),
+        ("igst", "FLOAT"),
+        ("state_code", "VARCHAR(2)"),
+        ("gst_rate", "FLOAT"),
+        ("gst_cess", "FLOAT"),
+        ("total_invoice_value", "FLOAT"),
+        ("type_of_supply", "VARCHAR(20)"),
+    ]
+
+    # Columns to add to extracted_invoices table (if they don't exist)
+    extracted_columns = [
+        ("date", "TIMESTAMP"),
+        ("invoice_number", "VARCHAR(100)"),
+        ("place_of_supply", "VARCHAR(100)"),
+        ("customer_gstin", "VARCHAR(15)"),
+        ("party_name", "VARCHAR(255)"),
+        ("taxable_value", "FLOAT"),
+        ("cgst", "FLOAT"),
+        ("sgst", "FLOAT"),
+        ("igst", "FLOAT"),
+        ("state_code", "VARCHAR(2)"),
+        ("gst_rate", "FLOAT"),
+        ("gst_cess", "FLOAT"),
+        ("total_invoice_value", "FLOAT"),
+        ("type_of_supply", "VARCHAR(20)"),
+        ("invoice_id", "VARCHAR(100)"),
+        ("amount", "VARCHAR(50)"),
+        ("confidence", "VARCHAR(10)"),
+        ("raw_response", "JSON"),
+        ("created_at", "TIMESTAMP"),
+    ]
+
+    with engine.connect() as conn:
+        # Add columns to documents table
+        for col_name, col_type in documents_columns:
+            try:
+                conn.execute(text(f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                conn.commit()
+            except Exception as e:
+                # Column might already exist or other error
+                conn.rollback()
+                print(f"Migration note for documents.{col_name}: {e}")
+
+        # Add columns to extracted_invoices table
+        for col_name, col_type in extracted_columns:
+            try:
+                conn.execute(text(f"ALTER TABLE extracted_invoices ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"Migration note for extracted_invoices.{col_name}: {e}")
+
+    print("Database migrations completed!")
 
 
 def get_db():
