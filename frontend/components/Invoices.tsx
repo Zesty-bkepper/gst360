@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Button from './Button';
 import { ICONS } from '../constants';
 import { API_BASE } from '../config';
+import { useAuth } from '../context/AuthContext';
 
 interface ExtractedData {
   invoice_id: string | null;
@@ -89,8 +90,9 @@ interface VerificationState {
 }
 
 const Invoices: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const businessId = searchParams.get('business_id') || '1';
+  const { user, getAuthHeaders, logout } = useAuth();
+  const navigate = useNavigate();
+  const businessId = user?.business_id?.toString() || '1';
 
   const [business, setBusiness] = useState<Business | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -103,13 +105,19 @@ const Invoices: React.FC = () => {
   // Fetch data
   useEffect(() => {
     const fetchData = async () => {
+      const headers = getAuthHeaders();
+
       try {
-        const bizResponse = await fetch(`${API_BASE}/api/businesses/${businessId}`);
+        const bizResponse = await fetch(`${API_BASE}/api/businesses/${businessId}`, { headers });
         if (bizResponse.ok) {
           setBusiness(await bizResponse.json());
+        } else if (bizResponse.status === 401) {
+          logout();
+          navigate('/login');
+          return;
         }
 
-        const docsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`);
+        const docsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`, { headers });
         if (docsResponse.ok) {
           const docs = await docsResponse.json();
           setInvoices(docs);
@@ -165,7 +173,7 @@ const Invoices: React.FC = () => {
     };
 
     fetchData();
-  }, [businessId]);
+  }, [businessId, getAuthHeaders, logout, navigate]);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
@@ -176,6 +184,8 @@ const Invoices: React.FC = () => {
   const handleFiles = async (fileList: FileList | null) => {
     if (!fileList) return;
 
+    const headers = getAuthHeaders();
+
     for (const file of Array.from(fileList)) {
       const formData = new FormData();
       formData.append('file', file);
@@ -183,6 +193,7 @@ const Invoices: React.FC = () => {
       try {
         const response = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`, {
           method: 'POST',
+          headers,
           body: formData,
         });
 
@@ -197,13 +208,14 @@ const Invoices: React.FC = () => {
             try {
               const processResponse = await fetch(`${API_BASE}/api/documents/${newDoc.id}/process`, {
                 method: 'PATCH',
+                headers,
               });
 
               if (processResponse.ok) {
                 const result = await processResponse.json();
 
                 // Refresh the document
-                const docResponse = await fetch(`${API_BASE}/api/documents/${newDoc.id}`);
+                const docResponse = await fetch(`${API_BASE}/api/documents/${newDoc.id}`, { headers });
                 if (docResponse.ok) {
                   const updatedDoc = await docResponse.json();
                   setInvoices(prev => prev.map(inv =>
@@ -292,10 +304,12 @@ const Invoices: React.FC = () => {
     const state = verificationStates.get(docId);
     if (!state) return;
 
+    const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
+
     try {
       const response = await fetch(`${API_BASE}/api/documents/${docId}/confirm`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           invoice_number: state.invoiceId,
           gst_amount: state.amount,
@@ -327,9 +341,12 @@ const Invoices: React.FC = () => {
   };
 
   const deleteInvoice = async (id: number) => {
+    const headers = getAuthHeaders();
+
     try {
       const response = await fetch(`${API_BASE}/api/documents/${id}`, {
         method: 'DELETE',
+        headers,
       });
       if (response.ok) {
         setInvoices(prev => prev.filter(inv => inv.id !== id));
@@ -342,6 +359,11 @@ const Invoices: React.FC = () => {
     } catch (error) {
       console.error('Failed to delete:', error);
     }
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
   };
 
   if (isLoading) {
@@ -372,14 +394,23 @@ const Invoices: React.FC = () => {
           </Link>
 
           <div className="flex items-center gap-4">
-            <Link to={`/dashboard?business_id=${businessId}`} className="text-sm text-slate-600 hover:text-blue-600 font-medium">
+            <Link to="/dashboard" className="text-sm text-slate-600 hover:text-blue-600 font-medium">
               Dashboard
             </Link>
             <div className="px-4 py-2 bg-blue-50 rounded-xl border border-blue-100">
               <span className="text-sm font-semibold text-blue-600">
-                {business?.business_name || 'Business'}
+                {user?.business_name || business?.business_name || 'Business'}
               </span>
             </div>
+            <button
+              onClick={handleLogout}
+              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+              title="Logout"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
           </div>
         </div>
       </nav>

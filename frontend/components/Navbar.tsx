@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Button from './Button';
 import { ICONS } from '../constants';
+import { useAuth } from '../context/AuthContext';
 
 const Navbar: React.FC = () => {
   const [scrolled, setScrolled] = useState(false);
+  const { isAuthenticated, user, logout } = useAuth();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -13,6 +16,11 @@ const Navbar: React.FC = () => {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/');
+  };
 
   return (
     <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
@@ -39,13 +47,33 @@ const Navbar: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-4">
-          <Link to="/dashboard">
-            <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-slate-600 hover:text-slate-900">Dashboard</Button>
-          </Link>
-          <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-slate-600 hover:text-slate-900">Log In</Button>
-          <Link to="/signup">
-            <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20 shadow-lg">Get Started</Button>
-          </Link>
+          {isAuthenticated ? (
+            <>
+              <Link to="/dashboard">
+                <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-slate-600 hover:text-slate-900">Dashboard</Button>
+              </Link>
+              <span className="hidden sm:inline-flex text-sm font-medium text-slate-600">
+                {user?.business_name}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-slate-600 hover:text-red-600"
+                onClick={handleLogout}
+              >
+                Log Out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Link to="/login">
+                <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-slate-600 hover:text-slate-900">Log In</Button>
+              </Link>
+              <Link to="/signup">
+                <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20 shadow-lg">Get Started</Button>
+              </Link>
+            </>
+          )}
         </div>
       </div>
     </nav>

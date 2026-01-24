@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir \
     anthropic>=0.40.0 \
     pillow>=10.0.0 \
     boto3>=1.34.0 \
-    psycopg2-binary>=2.9.0
+    psycopg2-binary>=2.9.0 \
+    pyjwt>=2.8.0
 
 # Copy application code
 COPY . .

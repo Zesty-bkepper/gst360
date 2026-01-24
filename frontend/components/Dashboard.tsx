@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Button from './Button';
 import { ICONS } from '../constants';
 import { API_BASE } from '../config';
+import { useAuth } from '../context/AuthContext';
 
 interface UploadedFile {
   id: number;
@@ -31,8 +32,9 @@ interface DashboardStats {
 }
 
 const Dashboard: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const businessId = searchParams.get('business_id') || '1';
+  const { user, getAuthHeaders, logout } = useAuth();
+  const navigate = useNavigate();
+  const businessId = user?.business_id?.toString() || '1';
 
   const [business, setBusiness] = useState<Business | null>(null);
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -49,23 +51,29 @@ const Dashboard: React.FC = () => {
   // Fetch business data
   useEffect(() => {
     const fetchData = async () => {
+      const headers = getAuthHeaders();
+
       try {
         // Fetch business info
-        const bizResponse = await fetch(`${API_BASE}/api/businesses/${businessId}`);
+        const bizResponse = await fetch(`${API_BASE}/api/businesses/${businessId}`, { headers });
         if (bizResponse.ok) {
           const bizData = await bizResponse.json();
           setBusiness(bizData);
+        } else if (bizResponse.status === 401) {
+          logout();
+          navigate('/login');
+          return;
         }
 
         // Fetch documents
-        const docsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`);
+        const docsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`, { headers });
         if (docsResponse.ok) {
           const docsData = await docsResponse.json();
           setFiles(docsData);
         }
 
         // Fetch dashboard stats
-        const statsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/dashboard`);
+        const statsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/dashboard`, { headers });
         if (statsResponse.ok) {
           const statsData = await statsResponse.json();
           setStats(statsData);
@@ -78,7 +86,7 @@ const Dashboard: React.FC = () => {
     };
 
     fetchData();
-  }, [businessId]);
+  }, [businessId, getAuthHeaders, logout, navigate]);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
@@ -89,6 +97,8 @@ const Dashboard: React.FC = () => {
   const handleFiles = async (fileList: FileList | null) => {
     if (!fileList) return;
 
+    const headers = getAuthHeaders();
+
     for (const file of Array.from(fileList)) {
       const formData = new FormData();
       formData.append('file', file);
@@ -96,6 +106,7 @@ const Dashboard: React.FC = () => {
       try {
         const response = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`, {
           method: 'POST',
+          headers,
           body: formData,
         });
 
@@ -108,20 +119,21 @@ const Dashboard: React.FC = () => {
             pending_documents: prev.pending_documents + 1
           }));
 
-          // Simulate processing after 2 seconds
+          // Process after upload
           setTimeout(async () => {
             try {
               await fetch(`${API_BASE}/api/documents/${newDoc.id}/process`, {
                 method: 'PATCH',
+                headers,
               });
               // Refresh documents
-              const docsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`);
+              const docsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/documents`, { headers });
               if (docsResponse.ok) {
                 const docsData = await docsResponse.json();
                 setFiles(docsData);
               }
               // Refresh stats
-              const statsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/dashboard`);
+              const statsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/dashboard`, { headers });
               if (statsResponse.ok) {
                 const statsData = await statsResponse.json();
                 setStats(statsData);
@@ -153,14 +165,17 @@ const Dashboard: React.FC = () => {
   };
 
   const removeFile = async (id: number) => {
+    const headers = getAuthHeaders();
+
     try {
       const response = await fetch(`${API_BASE}/api/documents/${id}`, {
         method: 'DELETE',
+        headers,
       });
       if (response.ok) {
         setFiles(prev => prev.filter(f => f.id !== id));
         // Refresh stats
-        const statsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/dashboard`);
+        const statsResponse = await fetch(`${API_BASE}/api/businesses/${businessId}/dashboard`, { headers });
         if (statsResponse.ok) {
           const statsData = await statsResponse.json();
           setStats(statsData);
@@ -169,6 +184,11 @@ const Dashboard: React.FC = () => {
     } catch (error) {
       console.error('Failed to delete:', error);
     }
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
   };
 
   if (isLoading) {
@@ -196,14 +216,14 @@ const Dashboard: React.FC = () => {
 
           <div className="flex items-center gap-4">
             <Link
-              to={`/invoices?business_id=${businessId}`}
+              to="/invoices"
               className="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors"
             >
               Invoices
             </Link>
             <div className="px-4 py-2 bg-blue-50 rounded-xl border border-blue-100">
               <span className="text-sm font-semibold text-blue-600">
-                {business?.business_name || 'XYZ Enterprises'}
+                {user?.business_name || business?.business_name || 'Business'}
               </span>
             </div>
             <div className="px-3 py-1.5 bg-green-50 rounded-lg border border-green-100">
@@ -211,8 +231,10 @@ const Dashboard: React.FC = () => {
                 {business?.onboarding_status || 'Active'}
               </span>
             </div>
-            <Button variant="ghost" size="sm" className="text-slate-600">
-              <ICONS.Settings className="w-5 h-5" />
+            <Button variant="ghost" size="sm" className="text-slate-600" onClick={handleLogout}>
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
             </Button>
           </div>
         </div>

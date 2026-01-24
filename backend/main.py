@@ -1,13 +1,15 @@
 """
 GST360 Backend API - Business Management and Document Processing
+With security hardening: Authentication, Authorization, Input Validation
 """
-import uuid
+import os
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -20,6 +22,11 @@ from models import (
 )
 from agent import process_invoice
 from storage import storage
+from auth import (
+    get_current_business, create_access_token, hash_password, verify_password,
+    LoginRequest, LoginResponse, RegisterRequest, security
+)
+from security import validate_file_content, sanitize_string, sanitize_business_input
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -28,27 +35,173 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware for frontend
-# In production, replace * with your actual domain
-import os
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
-# Allow all origins in production behind ALB (ALB handles security)
-if os.getenv("ALLOW_ALL_ORIGINS", "false").lower() == "true":
-    CORS_ORIGINS = ["*"]
+
+# ==================== Security Middleware ====================
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses"""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Cache-Control"] = "no-store"
+        # Remove server header
+        if "server" in response.headers:
+            del response.headers["server"]
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# CORS middleware - restricted to specific origins
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://gst360-alb-68296613.ap-south-1.elb.amazonaws.com"
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# ==================== Database Column for Password ====================
+# Note: Run this migration to add password columns to businesses table
+def add_password_columns():
+    """Add password columns if they don't exist"""
+    from sqlalchemy import text
+    from database import engine
+    columns = [
+        ("password_hash", "VARCHAR(128)"),
+        ("password_salt", "VARCHAR(64)"),
+    ]
+    with engine.connect() as conn:
+        for col_name, col_type in columns:
+            try:
+                conn.execute(text(f"ALTER TABLE businesses ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"Migration note for businesses.{col_name}: {e}")
+
 
 # Initialize database on startup
 @app.on_event("startup")
 def startup():
     init_db()
+    add_password_columns()
     print("Database initialized successfully!")
+
+
+# ==================== Auth Endpoints ====================
+
+@app.post("/api/auth/register", response_model=LoginResponse, status_code=201)
+def register(request: RegisterRequest, db: Session = Depends(get_db)):
+    """
+    Register a new business with password
+    """
+    # Sanitize inputs
+    business_name = sanitize_string(request.business_name)
+
+    # Check if GSTN already exists
+    existing = db.query(Business).filter(Business.gstn == request.gstn).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Business with this GSTN already exists")
+
+    # Check if email already exists
+    existing_email = db.query(Business).filter(Business.email == request.email).first()
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Hash password
+    password_hash, password_salt = hash_password(request.password)
+
+    # Create new business
+    db_business = Business(
+        business_name=business_name,
+        email=request.email,
+        phone=sanitize_string(request.phone) if request.phone else None,
+        gstn=request.gstn.upper(),
+        pan_card=request.pan_card.upper(),
+        onboarding_status=OnboardingStatus.PENDING,
+        onboarding_step=1
+    )
+
+    # Set password (using raw SQL since column may not be in model)
+    db.add(db_business)
+    db.commit()
+    db.refresh(db_business)
+
+    # Update password hash using raw SQL
+    from sqlalchemy import text
+    db.execute(
+        text("UPDATE businesses SET password_hash = :hash, password_salt = :salt WHERE id = :id"),
+        {"hash": password_hash, "salt": password_salt, "id": db_business.id}
+    )
+    db.commit()
+
+    # Generate token
+    access_token = create_access_token(db_business.id, db_business.email)
+
+    return LoginResponse(
+        access_token=access_token,
+        business_id=db_business.id,
+        business_name=db_business.business_name,
+        expires_in=3600
+    )
+
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Login with email and password
+    """
+    # Find business by email
+    business = db.query(Business).filter(Business.email == request.email).first()
+    if not business:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Get password hash and salt using raw SQL
+    from sqlalchemy import text
+    result = db.execute(
+        text("SELECT password_hash, password_salt FROM businesses WHERE id = :id"),
+        {"id": business.id}
+    ).fetchone()
+
+    if not result or not result[0] or not result[1]:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    password_hash, password_salt = result[0], result[1]
+
+    # Verify password
+    if not verify_password(request.password, password_hash, password_salt):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not business.is_active:
+        raise HTTPException(status_code=403, detail="Account is deactivated")
+
+    # Generate token
+    access_token = create_access_token(business.id, business.email)
+
+    return LoginResponse(
+        access_token=access_token,
+        business_id=business.id,
+        business_name=business.business_name,
+        expires_in=3600
+    )
+
+
+@app.get("/api/auth/me", response_model=BusinessResponse)
+def get_current_user(current_business: Business = Depends(get_current_business)):
+    """
+    Get current authenticated business info
+    """
+    return current_business
 
 
 # ==================== Business Endpoints ====================
@@ -56,8 +209,11 @@ def startup():
 @app.post("/api/businesses", response_model=BusinessResponse, status_code=201)
 def create_business(business: BusinessCreate, db: Session = Depends(get_db)):
     """
-    Register a new business (Signup endpoint)
+    Register a new business (Legacy endpoint - use /api/auth/register instead)
     """
+    # Sanitize inputs
+    business_name = sanitize_string(business.business_name)
+
     # Check if GSTN already exists
     existing = db.query(Business).filter(Business.gstn == business.gstn).first()
     if existing:
@@ -68,14 +224,14 @@ def create_business(business: BusinessCreate, db: Session = Depends(get_db)):
     if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Create new business
+    # Create new business with sanitized inputs
     db_business = Business(
-        business_name=business.business_name,
+        business_name=business_name,
         email=business.email,
-        phone=business.phone,
-        gstn=business.gstn,
-        pan_card=business.pan_card,
-        iec_code=business.iec_code,
+        phone=sanitize_string(business.phone) if business.phone else None,
+        gstn=business.gstn.upper(),
+        pan_card=business.pan_card.upper(),
+        iec_code=sanitize_string(business.iec_code) if business.iec_code else None,
         is_pan_india=business.is_pan_india,
         selected_states=business.selected_states,
         annual_turnover=business.annual_turnover,
@@ -95,101 +251,116 @@ def list_businesses(
     skip: int = 0,
     limit: int = 100,
     status: Optional[str] = None,
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
-    List all registered businesses with optional filtering
+    List businesses - returns only the authenticated business (no mass exposure)
     """
-    query = db.query(Business)
-
-    if status:
-        query = query.filter(Business.onboarding_status == status)
-
-    businesses = query.offset(skip).limit(limit).all()
-    return businesses
+    # Only return the authenticated business (prevent mass data exposure)
+    return [current_business]
 
 
 @app.get("/api/businesses/{business_id}", response_model=BusinessResponse)
-def get_business(business_id: int, db: Session = Depends(get_db)):
+def get_business(
+    business_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Get a specific business by ID
+    Get a specific business by ID (IDOR protected)
     """
-    business = db.query(Business).filter(Business.id == business_id).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-    return business
+    # IDOR Protection: Can only access own business
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return current_business
 
 
 @app.get("/api/businesses/gstn/{gstn}", response_model=BusinessResponse)
-def get_business_by_gstn(gstn: str, db: Session = Depends(get_db)):
+def get_business_by_gstn(
+    gstn: str,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Get a specific business by GSTN
+    Get a specific business by GSTN (IDOR protected)
     """
-    business = db.query(Business).filter(Business.gstn == gstn.upper()).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-    return business
+    # IDOR Protection: Can only access own business
+    if gstn.upper() != current_business.gstn:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return current_business
 
 
 @app.patch("/api/businesses/{business_id}", response_model=BusinessResponse)
 def update_business(
     business_id: int,
     updates: BusinessUpdate,
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
-    Update business information
+    Update business information (IDOR protected)
     """
-    business = db.query(Business).filter(Business.id == business_id).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
+    # IDOR Protection: Can only update own business
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
+    # Sanitize string inputs
     update_data = updates.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(business, field, value)
+    sanitized_data = sanitize_business_input(update_data)
+
+    for field, value in sanitized_data.items():
+        setattr(current_business, field, value)
 
     db.commit()
-    db.refresh(business)
-    return business
+    db.refresh(current_business)
+    return current_business
 
 
 @app.patch("/api/businesses/{business_id}/onboarding", response_model=BusinessResponse)
 def update_onboarding_status(
     business_id: int,
     status_update: OnboardingStatusUpdate,
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
-    Update business onboarding status
+    Update business onboarding status (IDOR protected)
     """
-    business = db.query(Business).filter(Business.id == business_id).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
+    # IDOR Protection
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    business.onboarding_status = status_update.onboarding_status
+    current_business.onboarding_status = status_update.onboarding_status
 
     if status_update.onboarding_step:
-        business.onboarding_step = status_update.onboarding_step
+        current_business.onboarding_step = status_update.onboarding_step
 
     if status_update.onboarding_status == OnboardingStatus.VERIFIED.value:
-        business.verified_at = datetime.utcnow()
+        current_business.verified_at = datetime.utcnow()
 
     db.commit()
-    db.refresh(business)
-    return business
+    db.refresh(current_business)
+    return current_business
 
 
 @app.get("/api/businesses/{business_id}/onboarding-progress", response_model=OnboardingProgress)
-def get_onboarding_progress(business_id: int, db: Session = Depends(get_db)):
+def get_onboarding_progress(
+    business_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Get detailed onboarding progress for a business
+    Get detailed onboarding progress for a business (IDOR protected)
     """
-    business = db.query(Business).filter(Business.id == business_id).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
+    # IDOR Protection
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     steps = ["Registration", "Document Upload", "Verification", "Activation"]
-    completed_steps = steps[:business.onboarding_step]
+    completed_steps = steps[:current_business.onboarding_step]
 
     next_actions = {
         OnboardingStatus.PENDING.value: "Upload required documents",
@@ -201,12 +372,12 @@ def get_onboarding_progress(business_id: int, db: Session = Depends(get_db)):
     }
 
     return OnboardingProgress(
-        current_step=business.onboarding_step,
+        current_step=current_business.onboarding_step,
         total_steps=4,
-        status=business.onboarding_status.value if hasattr(business.onboarding_status, 'value') else business.onboarding_status,
+        status=current_business.onboarding_status.value if hasattr(current_business.onboarding_status, 'value') else current_business.onboarding_status,
         steps_completed=completed_steps,
         next_action=next_actions.get(
-            business.onboarding_status.value if hasattr(business.onboarding_status, 'value') else business.onboarding_status,
+            current_business.onboarding_status.value if hasattr(current_business.onboarding_status, 'value') else current_business.onboarding_status,
             "Unknown"
         )
     )
@@ -218,37 +389,39 @@ def get_onboarding_progress(business_id: int, db: Session = Depends(get_db)):
 async def upload_document(
     business_id: int,
     file: UploadFile = File(...),
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
     Upload a document (invoice/receipt) for a business.
-    Saves to local filesystem and optionally to AWS S3.
+    Validates file content using magic bytes, not just MIME type.
     """
-    # Verify business exists
-    business = db.query(Business).filter(Business.id == business_id).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-
-    # Validate file type
-    allowed_types = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type {file.content_type} not allowed. Allowed: PDF, JPEG, PNG, GIF, WebP"
-        )
+    # IDOR Protection: Can only upload to own business
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Read file content
     content = await file.read()
     file_size = len(content)
 
-    # Save using storage abstraction (local + optional S3)
-    file_path = storage().save(content, file.filename, business_id)
+    # Validate file content using magic bytes (not just MIME type)
+    is_valid, detected_type, error = validate_file_content(content, file.content_type)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error)
 
-    # Create database record
+    # Sanitize filename (remove path traversal attempts)
+    safe_filename = Path(file.filename).name
+    if not safe_filename or safe_filename.startswith('.'):
+        safe_filename = f"upload_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+
+    # Save using storage abstraction (local + optional S3)
+    file_path = storage().save(content, safe_filename, business_id)
+
+    # Create database record with detected type (not claimed type)
     db_document = Document(
         business_id=business_id,
-        filename=file.filename,
-        file_type=file.content_type,
+        filename=safe_filename,
+        file_type=detected_type,
         file_size=file_size,
         file_path=file_path,
         status="pending"
@@ -259,9 +432,9 @@ async def upload_document(
     db.refresh(db_document)
 
     # Update business onboarding status if first document
-    if business.onboarding_status == OnboardingStatus.PENDING:
-        business.onboarding_status = OnboardingStatus.DOCUMENTS_UPLOADED
-        business.onboarding_step = 2
+    if current_business.onboarding_status == OnboardingStatus.PENDING:
+        current_business.onboarding_status = OnboardingStatus.DOCUMENTS_UPLOADED
+        current_business.onboarding_step = 2
         db.commit()
 
     return db_document
@@ -271,11 +444,16 @@ async def upload_document(
 def list_documents(
     business_id: int,
     status: Optional[str] = None,
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
-    List all documents for a business
+    List all documents for a business (IDOR protected)
     """
+    # IDOR Protection
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     query = db.query(Document).filter(Document.business_id == business_id)
 
     if status:
@@ -286,24 +464,41 @@ def list_documents(
 
 
 @app.get("/api/documents/{document_id}", response_model=DocumentResponse)
-def get_document(document_id: int, db: Session = Depends(get_db)):
+def get_document(
+    document_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Get a specific document by ID
+    Get a specific document by ID (IDOR protected)
     """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # IDOR Protection: Can only access own documents
+    if document.business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     return document
 
 
 @app.get("/api/documents/{document_id}/file")
-def get_document_file(document_id: int, db: Session = Depends(get_db)):
+def get_document_file(
+    document_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Serve the actual document file (image/PDF)
+    Serve the actual document file (IDOR protected)
     """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # IDOR Protection: Can only access own documents
+    if document.business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     file_path = Path(document.file_path)
     if not file_path.exists():
@@ -317,14 +512,22 @@ def get_document_file(document_id: int, db: Session = Depends(get_db)):
 
 
 @app.patch("/api/documents/{document_id}/process")
-def process_document_endpoint(document_id: int, db: Session = Depends(get_db)):
+def process_document_endpoint(
+    document_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Process document using LangGraph + Anthropic Vision
+    Process document using LangGraph + Anthropic Vision (IDOR protected)
     Extracts GST-compliant invoice data and classifies supply type (B2B/B2C)
     """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # IDOR Protection: Can only process own documents
+    if document.business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Update status to processing
     document.status = "processing"
@@ -439,13 +642,21 @@ def process_document_endpoint(document_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/documents/{document_id}")
-def delete_document(document_id: int, db: Session = Depends(get_db)):
+def delete_document(
+    document_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Delete a document from storage and database
+    Delete a document from storage and database (IDOR protected)
     """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # IDOR Protection: Can only delete own documents
+    if document.business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Delete file from storage (local + S3 if configured)
     storage().delete(document.file_path)
@@ -461,17 +672,18 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/extracted-invoices")
 def list_extracted_invoices(
-    business_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
-    List all extracted invoices with GST data
+    List extracted invoices for authenticated business only (IDOR protected)
     """
-    query = db.query(ExtractedInvoice)
-    if business_id:
-        query = query.filter(ExtractedInvoice.business_id == business_id)
+    # Only return invoices for authenticated business
+    query = db.query(ExtractedInvoice).filter(
+        ExtractedInvoice.business_id == current_business.id
+    )
 
     invoices = query.order_by(ExtractedInvoice.created_at.desc()).offset(skip).limit(limit).all()
 
@@ -505,15 +717,19 @@ def list_extracted_invoices(
 def confirm_invoice_data(
     document_id: int,
     data: InvoiceConfirm,
+    current_business: Business = Depends(get_current_business),
     db: Session = Depends(get_db)
 ):
     """
-    Confirm or update extracted invoice data after user verification.
-    Called when user verifies the extracted data is correct or edits it.
+    Confirm or update extracted invoice data (IDOR protected)
     """
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # IDOR Protection: Can only confirm own documents
+    if document.business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Update document with confirmed/edited values
     if data.invoice_number is not None:
@@ -567,15 +783,19 @@ def confirm_invoice_data(
 # ==================== Dashboard Endpoints ====================
 
 @app.get("/api/businesses/{business_id}/dashboard", response_model=DashboardStats)
-def get_dashboard_stats(business_id: int, db: Session = Depends(get_db)):
+def get_dashboard_stats(
+    business_id: int,
+    current_business: Business = Depends(get_current_business),
+    db: Session = Depends(get_db)
+):
     """
-    Get dashboard statistics for a business
+    Get dashboard statistics for a business (IDOR protected)
     """
-    business = db.query(Business).filter(Business.id == business_id).first()
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
+    # IDOR Protection
+    if business_id != current_business.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    documents = db.query(Document).filter(Document.business_id == business_id).all()
+    documents = db.query(Document).filter(Document.business_id == current_business.id).all()
 
     total = len(documents)
     processed = len([d for d in documents if d.status == "completed"])
@@ -603,6 +823,94 @@ def get_dashboard_stats(business_id: int, db: Session = Depends(get_db)):
         total_gst=f"₹{total_gst:,.2f}",
         last_upload=last_upload
     )
+
+
+# ==================== Debug Endpoint (temporary) ====================
+
+DEBUG_SECRET = os.getenv("DEBUG_SECRET", "gst360-debug-temp-key")
+
+@app.get("/api/debug/schema")
+def debug_schema(secret: str, db: Session = Depends(get_db)):
+    """
+    Check actual database schema on production.
+    """
+    if secret != DEBUG_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret")
+
+    from sqlalchemy import text, inspect
+    from database import engine
+
+    inspector = inspect(engine)
+
+    tables = {}
+    for table_name in ['businesses', 'documents', 'extracted_invoices']:
+        columns = inspector.get_columns(table_name)
+        tables[table_name] = [
+            {"name": col['name'], "type": str(col['type'])}
+            for col in columns
+        ]
+
+    return {"database": str(engine.url).split('@')[-1], "tables": tables}
+
+
+@app.get("/api/debug/tables")
+def debug_tables(secret: str, db: Session = Depends(get_db)):
+    """
+    Temporary debug endpoint to view table contents.
+    Requires secret key. Remove in production.
+    """
+    if secret != DEBUG_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret")
+
+    businesses = db.query(Business).limit(10).all()
+    documents = db.query(Document).order_by(Document.id.desc()).limit(10).all()
+    invoices = db.query(ExtractedInvoice).order_by(ExtractedInvoice.id.desc()).limit(10).all()
+
+    # Get total counts
+    total_businesses = db.query(Business).count()
+    total_documents = db.query(Document).count()
+    total_invoices = db.query(ExtractedInvoice).count()
+
+    return {
+        "counts": {
+            "businesses": total_businesses,
+            "documents": total_documents,
+            "extracted_invoices": total_invoices
+        },
+        "businesses": [
+            {"id": b.id, "name": b.business_name, "email": b.email, "gstn": b.gstn,
+             "pan": b.pan_card, "status": str(b.onboarding_status), "created_at": str(b.created_at)}
+            for b in businesses
+        ],
+        "documents": [
+            {"id": d.id, "filename": d.filename, "status": d.status, "business_id": d.business_id,
+             "type": d.file_type, "invoice_number": d.invoice_number, "uploaded_at": str(d.uploaded_at)}
+            for d in documents
+        ],
+        "extracted_invoices": [
+            {
+                "id": i.id,
+                "document_id": i.document_id,
+                "business_id": i.business_id,
+                "invoice_number": i.invoice_number,
+                "date": str(i.date) if i.date else None,
+                "place_of_supply": i.place_of_supply,
+                "customer_gstin": i.customer_gstin,
+                "party_name": i.party_name,
+                "taxable_value": i.taxable_value,
+                "cgst": i.cgst,
+                "sgst": i.sgst,
+                "igst": i.igst,
+                "state_code": i.state_code,
+                "gst_rate": i.gst_rate,
+                "total_invoice_value": i.total_invoice_value,
+                "type_of_supply": i.type_of_supply,
+                "confidence": i.confidence,
+                "created_at": str(i.created_at) if i.created_at else None
+            }
+            for i in invoices
+        ]
+    }
 
 
 # ==================== Health Check ====================

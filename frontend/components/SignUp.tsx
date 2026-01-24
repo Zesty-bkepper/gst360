@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import Button from './Button';
 import { ICONS } from '../constants';
-import { API_BASE } from '../config';
+import { useAuth } from '../context/AuthContext';
 
 // Indian States and Union Territories
 const INDIAN_STATES = [
@@ -34,6 +35,8 @@ interface FormData {
   annualTurnover: string;
   email: string;
   phone: string;
+  password: string;
+  confirmPassword: string;
 }
 
 const SignUp: React.FC = () => {
@@ -46,11 +49,17 @@ const SignUp: React.FC = () => {
     selectedStates: [],
     annualTurnover: '',
     email: '',
-    phone: ''
+    phone: '',
+    password: '',
+    confirmPassword: ''
   });
 
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const { register } = useAuth();
+  const navigate = useNavigate();
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -76,46 +85,48 @@ const SignUp: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+
+    // Validate password match
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    // Validate password strength
+    if (formData.password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
     setIsLoading(true);
 
-    try {
-      const response = await fetch(`${API_BASE}/api/businesses`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          business_name: formData.businessName,
-          email: formData.email,
-          phone: formData.phone || null,
-          gstn: formData.gstn.toUpperCase(),
-          pan_card: formData.panCard.toUpperCase(),
-          iec_code: formData.istn || null,
-          is_pan_india: formData.isPanIndia,
-          selected_states: formData.selectedStates,
-          annual_turnover: formData.annualTurnover,
-        }),
-      });
+    const result = await register({
+      business_name: formData.businessName,
+      email: formData.email,
+      password: formData.password,
+      gstn: formData.gstn.toUpperCase(),
+      pan_card: formData.panCard.toUpperCase(),
+      phone: formData.phone || undefined,
+    });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Registration failed');
-      }
-
-      const business = await response.json();
-      // Redirect to dashboard with business ID
-      window.location.href = `/dashboard?business_id=${business.id}`;
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Registration failed. Please try again.');
-    } finally {
-      setIsLoading(false);
+    if (result.success) {
+      // Redirect to dashboard (auth context will have the business_id)
+      navigate('/dashboard');
+    } else {
+      setError(result.error || 'Registration failed. Please try again.');
     }
+
+    setIsLoading(false);
   };
 
   const validateStep = (currentStep: number): boolean => {
     switch (currentStep) {
       case 1:
-        return formData.businessName.length > 0 && formData.email.length > 0;
+        return formData.businessName.length > 0 &&
+               formData.email.length > 0 &&
+               formData.password.length >= 8 &&
+               formData.password === formData.confirmPassword;
       case 2:
         return formData.gstn.length === 15 && formData.panCard.length === 10;
       case 3:
@@ -136,9 +147,14 @@ const SignUp: React.FC = () => {
             </div>
             <span className="text-xl font-black tracking-tight text-slate-900">GST<span className="text-blue-600">360</span></span>
           </a>
-          <a href="/" className="text-sm font-bold text-slate-500 hover:text-blue-600 transition-colors">
-            ← Back to Home
-          </a>
+          <div className="flex items-center gap-4">
+            <Link to="/login" className="text-sm font-bold text-blue-600 hover:text-blue-700 transition-colors">
+              Sign In
+            </Link>
+            <Link to="/" className="text-sm font-bold text-slate-500 hover:text-blue-600 transition-colors">
+              Back to Home
+            </Link>
+          </div>
         </div>
       </nav>
 
@@ -235,6 +251,51 @@ const SignUp: React.FC = () => {
                         />
                       </div>
                     </div>
+
+                    <div className="grid md:grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
+                          Password *
+                        </label>
+                        <input
+                          type="password"
+                          name="password"
+                          value={formData.password}
+                          onChange={handleInputChange}
+                          placeholder="Min. 8 characters"
+                          className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-5 placeholder:text-slate-400 text-slate-900 focus:bg-white outline-none transition-all focus:border-blue-400 text-base font-medium"
+                          required
+                        />
+                        <p className="text-xs text-slate-400 ml-1">Minimum 8 characters</p>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
+                          Confirm Password *
+                        </label>
+                        <input
+                          type="password"
+                          name="confirmPassword"
+                          value={formData.confirmPassword}
+                          onChange={handleInputChange}
+                          placeholder="Re-enter password"
+                          className={`w-full bg-slate-50 border rounded-2xl px-6 py-5 placeholder:text-slate-400 text-slate-900 focus:bg-white outline-none transition-all text-base font-medium ${
+                            formData.confirmPassword && formData.password !== formData.confirmPassword
+                              ? 'border-red-300 focus:border-red-400'
+                              : 'border-slate-100 focus:border-blue-400'
+                          }`}
+                          required
+                        />
+                        {formData.confirmPassword && formData.password !== formData.confirmPassword && (
+                          <p className="text-xs text-red-500 ml-1">Passwords do not match</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {error && (
+                      <div className="p-4 bg-red-50 border border-red-200 rounded-2xl">
+                        <p className="text-sm text-red-600 font-medium">{error}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
