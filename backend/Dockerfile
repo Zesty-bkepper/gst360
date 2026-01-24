@@ -10,9 +10,6 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY pyproject.toml .
-
 # Install Python dependencies
 RUN pip install --no-cache-dir \
     fastapi>=0.109.0 \
@@ -29,7 +26,7 @@ RUN pip install --no-cache-dir \
     psycopg2-binary>=2.9.0
 
 # Copy application code
-COPY backend/ .
+COPY . .
 
 # Create uploads directory
 RUN mkdir -p uploads

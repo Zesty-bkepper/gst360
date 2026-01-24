@@ -54,9 +54,25 @@ class InvoiceProcessor:
         result = self._graph.invoke(initial_state)
 
         return {
+            # GST Compliance Fields
+            "date": result.get("date"),
+            "invoice_number": result.get("invoice_number"),
+            "place_of_supply": result.get("place_of_supply"),
+            "customer_gstin": result.get("customer_gstin"),
+            "party_name": result.get("party_name"),
+            "taxable_value": result.get("taxable_value"),
+            "cgst": result.get("cgst"),
+            "sgst": result.get("sgst"),
+            "igst": result.get("igst"),
+            "state_code": result.get("state_code"),
+            "gst_rate": result.get("gst_rate"),
+            "gst_cess": result.get("gst_cess"),
+            "total_invoice_value": result.get("total_invoice_value"),
+            "type_of_supply": result.get("type_of_supply"),
+            # Legacy fields
             "invoice_id": result.get("invoice_id"),
             "amount": result.get("amount"),
-            "date": result.get("date"),
+            # Metadata
             "confidence": result.get("confidence"),
             "raw_response": result.get("raw_response"),
             "error": result.get("error"),

@@ -216,7 +216,7 @@ def run_migrations():
     # Columns to add to documents table (if they don't exist)
     documents_columns = [
         ("place_of_supply", "VARCHAR(100)"),
-        ("customer_gstin", "VARCHAR(15)"),
+        ("customer_gstin", "VARCHAR(20)"),  # Extended for demo/test GSTINs
         ("party_name", "VARCHAR(255)"),
         ("taxable_value", "FLOAT"),
         ("cgst", "FLOAT"),
@@ -234,7 +234,7 @@ def run_migrations():
         ("date", "TIMESTAMP"),
         ("invoice_number", "VARCHAR(100)"),
         ("place_of_supply", "VARCHAR(100)"),
-        ("customer_gstin", "VARCHAR(15)"),
+        ("customer_gstin", "VARCHAR(20)"),  # Extended for demo/test GSTINs
         ("party_name", "VARCHAR(255)"),
         ("taxable_value", "FLOAT"),
         ("cgst", "FLOAT"),
@@ -271,6 +271,20 @@ def run_migrations():
             except Exception as e:
                 conn.rollback()
                 print(f"Migration note for extracted_invoices.{col_name}: {e}")
+
+        # Resize customer_gstin columns if they exist (for demo/test GSTINs longer than 15 chars)
+        resize_columns = [
+            ("documents", "customer_gstin", "VARCHAR(20)"),
+            ("extracted_invoices", "customer_gstin", "VARCHAR(20)"),
+        ]
+        for table, col_name, col_type in resize_columns:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {col_name} TYPE {col_type}"))
+                conn.commit()
+                print(f"Resized {table}.{col_name} to {col_type}")
+            except Exception as e:
+                conn.rollback()
+                print(f"Resize note for {table}.{col_name}: {e}")
 
     print("Database migrations completed!")
 

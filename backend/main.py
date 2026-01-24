@@ -459,6 +459,48 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
     return {"message": "Document deleted successfully"}
 
 
+@app.get("/api/extracted-invoices")
+def list_extracted_invoices(
+    business_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """
+    List all extracted invoices with GST data
+    """
+    query = db.query(ExtractedInvoice)
+    if business_id:
+        query = query.filter(ExtractedInvoice.business_id == business_id)
+
+    invoices = query.order_by(ExtractedInvoice.created_at.desc()).offset(skip).limit(limit).all()
+
+    return [
+        {
+            "id": inv.id,
+            "document_id": inv.document_id,
+            "business_id": inv.business_id,
+            "date": inv.date.strftime("%Y-%m-%d") if inv.date else None,
+            "invoice_number": inv.invoice_number,
+            "place_of_supply": inv.place_of_supply,
+            "customer_gstin": inv.customer_gstin,
+            "party_name": inv.party_name,
+            "taxable_value": inv.taxable_value,
+            "cgst": inv.cgst,
+            "sgst": inv.sgst,
+            "igst": inv.igst,
+            "state_code": inv.state_code,
+            "gst_rate": inv.gst_rate,
+            "gst_cess": inv.gst_cess,
+            "total_invoice_value": inv.total_invoice_value,
+            "type_of_supply": inv.type_of_supply,
+            "confidence": inv.confidence,
+            "created_at": inv.created_at.isoformat() if inv.created_at else None,
+        }
+        for inv in invoices
+    ]
+
+
 @app.patch("/api/documents/{document_id}/confirm")
 def confirm_invoice_data(
     document_id: int,
